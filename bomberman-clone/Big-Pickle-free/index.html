@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Bomberman Clone</title>
+    <style>
+        body {
+            background: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: monospace;
+        }
+        #gameContainer {
+            text-align: center;
+        }
+        canvas {
+            border: 4px solid #444;
+            image-rendering: pixelated;
+        }
+        #ui {
+            color: #fff;
+            font-size: 14px;
+            margin-top: 8px;
+            display: flex;
+            justify-content: space-around;
+        }
+        #message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 32px;
+            font-weight: bold;
+            text-shadow: 2px 2px #000;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="game" width="480" height="416"></canvas>
+        <div id="ui">
+            <span id="enemies">Enemy: 4</span>
+            <span id="fire">Fire: 3</span>
+            <span id="bombs">Bomb: 1</span>
+        </div>
+        <div id="message"></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const GRID = 32;
+        const COLS = 15;
+        const ROWS = 13;
+
+        const EMPTY = 0;
+        const WALL = 1;
+        const SOFT_BLOCK = 2;
+
+        const TILE_COLORS = {
+            [EMPTY]: '#1a1a1a',
+            [WALL]: '#666',
+            [SOFT_BLOCK]: '#8B4513'
+        };
+
+        let map = [];
+        let player = null;
+        let enemies = [];
+        let bombs = [];
+        let flames = [];
+        let items = [];
+        let gameState = 'playing';
+        let keys = {};
+
+        class Entity {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.pixelX = x * GRID;
+                this.pixelY = y * GRID;
+                this.targetX = this.pixelX;
+                this.targetY = this.pixelY;
+                this.moving = false;
+            }
+
+            get gridX() { return Math.round(this.pixelX / GRID); }
+            get gridY() { return Math.round(this.pixelY / GRID); }
+        }
+
+        class Player extends Entity {
+            constructor(x, y) {
+                super(x, y);
+                this.fire = 3;
+                this.maxBombs = 1;
+                this.speed = 2;
+                this.alive = true;
+            }
+        }
+
+        class Enemy extends Entity {
+            constructor(x, y) {
+                super(x, y);
+                this.alive = true;
+                this.speed = 1;
+                this.direction = Math.floor(Math.random() * 4);
+                this.moveTimer = 0;
+            }
+        }
+
+        class Bomb extends Entity {
+            constructor(x, y, fire) {
+                super(x, y);
+                this.timer = 180;
+                this.fire = fire;
+            }
+        }
+
+        class Flame extends Entity {
+            constructor(x, y) {
+                super(x, y);
+                this.timer = 30;
+            }
+        }
+
+        class Item extends Entity {
+            constructor(x, y, type) {
+                super(x, y);
+                this.type = type;
+            }
+        }
+
+        function generateMap() {
+            map = [];
+            for (let y = 0; y < ROWS; y++) {
+                map[y] = [];
+                for (let x = 0; x < COLS; x++) {
+                    if (x === 0 || x === COLS - 1 || y === 0 || y === ROWS - 1) {
+                        map[y][x] = WALL;
+                    } else if (x % 2 === 0 && y % 2 === 0) {
+                        map[y][x] = WALL;
+                    } else {
+                        map[y][x] = EMPTY;
+                    }
+                }
+            }
+
+            const softBlockPositions = [];
+            for (let y = 1; y < ROWS - 1; y++) {
+                for (let x = 1; x < COLS - 1; x++) {
+                    if (map[y][x] === EMPTY) {
+                        if (!((x <= 2 && y <= 2) || (x <= 2 && y >= ROWS - 3) ||
+                              (x >= COLS - 3 && y <= 2) || (x >= COLS - 3 && y >= ROWS - 3))) {
+                            softBlockPositions.push({x, y});
+                        }
+                    }
+                }
+            }
+
+            for (let i = softBlockPositions.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [softBlockPositions[i], softBlockPositions[j]] = [softBlockPositions[j], softBlockPositions[i]];
+            }
+
+            for (let i = 0; i < 20 && i < softBlockPositions.length; i++) {
+                const {x, y} = softBlockPositions[i];
+                map[y][x] = SOFT_BLOCK;
+            }
+        }
+
+        function init() {
+            generateMap();
+            player = new Player(1, 1);
+            enemies = [
+                new Enemy(13, 1),
+                new Enemy(1, 11),
+                new Enemy(13, 11),
+                new Enemy(7, 5)
+            ];
+            bombs = [];
+            flames = [];
+            items = [];
+            gameState = 'playing';
+            updateUI();
+            document.getElementById('message').style.display = 'none';
+        }
+
+        function canMove(x, y) {
+            const gx = Math.floor(x / GRID);
+            const gy = Math.floor(y / GRID);
+            if (gx < 0 || gx >= COLS || gy < 0 || gy >= ROWS) return false;
+            if (map[gy][gx] !== EMPTY && map[gy][gx] !== SOFT_BLOCK) return false;
+            
+            for (const bomb of bombs) {
+                if (bomb.gridX === gx && bomb.gridY === gy) return false;
+            }
+            return true;
+        }
+
+        function moveEntity(entity, dx, dy) {
+            const newX = entity.pixelX + dx;
+            const newY = entity.pixelY + dy;
+            
+            const gx = Math.round(newX / GRID);
+            const gy = Math.round(newY / GRID);
+            
+            const margin = 4;
+            if (newX % GRID < margin || newX % GRID > GRID - margin) {
+                if (!canMove(newX - (newX % GRID) + GRID/2, entity.pixelY + GRID/2)) {
+                    return false;
+                }
+            }
+            if (newY % GRID < margin || newY % GRID > GRID - margin) {
+                if (!canMove(entity.pixelX + GRID/2, newY - (newY % GRID) + GRID/2)) {
+                    return false;
+                }
+            }
+            
+            entity.pixelX = newX;
+            entity.pixelY = newY;
+            return true;
+        }
+
+        function placeBomb() {
+            if (player.maxBombs > bombs.length) {
+                const gx = player.gridX;
+                const gy = player.gridY;
+                for (const bomb of bombs) {
+                    if (bomb.gridX === gx && bomb.gridY === gy) return;
+                }
+                bombs.push(new Bomb(gx, gy, player.fire));
+            }
+        }
+
+        function explode(bomb) {
+            const directions = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+            
+            for (const [dx, dy] of directions) {
+                const isCenter = dx === 0 && dy === 0;
+                const range = isCenter ? 1 : bomb.fire;
+                
+                for (let i = 1; i <= range; i++) {
+                    if (!isCenter && i > 1) break;
+                    
+                    const x = bomb.gridX + dx * i;
+                    const y = bomb.gridY + dy * i;
+                    
+                    if (x < 0 || x >= COLS || y < 0 || y >= ROWS) break;
+                    
+                    if (map[y][x] === WALL) break;
+                    
+                    flames.push(new Flame(x, y));
+                    
+                    if (map[y][x] === SOFT_BLOCK) {
+                        map[y][x] = EMPTY;
+                        if (Math.random() < 0.5) {
+                            const type = Math.random() < 0.5 ? 'fire' : 'bomb';
+                            items.push(new Item(x, y, type));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        function checkCollisions() {
+            for (const flame of flames) {
+                if (player.gridX === flame.gridX && player.gridY === flame.gridY) {
+                    player.alive = false;
+                    gameState = 'lose';
+                    showMessage('GAME OVER', '#f00');
+                }
+                
+                for (const enemy of enemies) {
+                    if (enemy.alive && enemy.gridX === flame.gridX && enemy.gridY === flame.gridY) {
+                        enemy.alive = false;
+                    }
+                }
+            }
+            
+            for (const enemy of enemies) {
+                if (enemy.alive && Math.abs(enemy.pixelX - player.pixelX) < 20 && 
+                    Math.abs(enemy.pixelY - player.pixelY) < 20) {
+                    player.alive = false;
+                    gameState = 'lose';
+                    showMessage('GAME OVER', '#f00');
+                }
+            }
+            
+            for (const item of items) {
+                if (player.gridX === item.gridX && player.gridY === item.gridY) {
+                    if (item.type === 'fire') {
+                        player.fire++;
+                    } else {
+                        player.maxBombs++;
+                    }
+                    items = items.filter(i => i !== item);
+                    updateUI();
+                }
+            }
+            
+            const aliveEnemies = enemies.filter(e => e.alive).length;
+            if (aliveEnemies === 0 && gameState === 'playing') {
+                gameState = 'win';
+                showMessage('YOU WIN!', '#0f0');
+            }
+        }
+
+        function showMessage(text, color) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.style.color = color;
+            msg.style.display = 'block';
+        }
+
+        function updateUI() {
+            document.getElementById('enemies').textContent = 'Enemy: ' + enemies.filter(e => e.alive).length;
+            document.getElementById('fire').textContent = 'Fire: ' + player.fire;
+            document.getElementById('bombs').textContent = 'Bomb: ' + player.maxBombs;
+        }
+
+        function updateEnemy(enemy) {
+            if (!enemy.alive) return;
+            
+            const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+            const dirs = [...directions];
+            for (let i = dirs.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [dirs[i], dirs[j]] = [dirs[j], dirs[i]];
+            }
+            
+            let moved = false;
+            for (const [dx, dy] of dirs) {
+                const newX = enemy.pixelX + dx * GRID;
+                const newY = enemy.pixelY + dy * GRID;
+                const gx = Math.round(newX / GRID);
+                const gy = Math.round(newY / GRID);
+                
+                if (gx >= 0 && gx < COLS && gy >= 0 && gy < ROWS) {
+                    if (map[gy][gx] === EMPTY) {
+                        let blocked = false;
+                        for (const bomb of bombs) {
+                            if (bomb.gridX === gx && bomb.gridY === gy) {
+                                blocked = true;
+                                break;
+                            }
+                        }
+                        if (!blocked) {
+                            enemy.pixelX = gx * GRID;
+                            enemy.pixelY = gy * GRID;
+                            moved = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        function update() {
+            if (gameState !== 'playing') return;
+            
+            if (keys['ArrowUp']) moveEntity(player, 0, -player.speed);
+            if (keys['ArrowDown']) moveEntity(player, 0, player.speed);
+            if (keys['ArrowLeft']) moveEntity(player, -player.speed, 0);
+            if (keys['ArrowRight']) moveEntity(player, player.speed, 0);
+            
+            player.pixelX = Math.max(0, Math.min(COLS * GRID - GRID, player.pixelX));
+            player.pixelY = Math.max(0, Math.min(ROWS * GRID - GRID, player.pixelY));
+            
+            for (const enemy of enemies) {
+                updateEnemy(enemy);
+            }
+            
+            for (const bomb of bombs) {
+                bomb.timer--;
+                if (bomb.timer <= 0) {
+                    explode(bomb);
+                }
+            }
+            bombs = bombs.filter(b => b.timer > 0);
+            
+            for (const flame of flames) {
+                flame.timer--;
+            }
+            flames = flames.filter(f => f.timer > 0);
+            
+            checkCollisions();
+            updateUI();
+        }
+
+        function draw() {
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    const tile = map[y][x];
+                    if (tile !== EMPTY) {
+                        ctx.fillStyle = TILE_COLORS[tile];
+                        ctx.fillRect(x * GRID, y * GRID, GRID, GRID);
+                        if (tile === SOFT_BLOCK) {
+                            ctx.fillStyle = '#A0522D';
+                            ctx.fillRect(x * GRID + 2, y * GRID + 2, GRID - 4, GRID - 4);
+                        }
+                    }
+                }
+            }
+            
+            for (const item of items) {
+                ctx.fillStyle = item.type === 'fire' ? '#FF6B00' : '#00BFFF';
+                const cx = item.gridX * GRID + GRID / 2;
+                const cy = item.gridY * GRID + GRID / 2;
+                ctx.beginPath();
+                ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 12px monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(item.type === 'fire' ? 'F' : 'B', cx, cy);
+            }
+            
+            for (const bomb of bombs) {
+                const cx = bomb.gridX * GRID + GRID / 2;
+                const cy = bomb.gridY * GRID + GRID / 2;
+                const pulse = Math.sin(bomb.timer * 0.3) * 2;
+                
+                ctx.fillStyle = '#333';
+                ctx.beginPath();
+                ctx.arc(cx, cy, 12 + pulse, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(cx - 3, cy - 3, 4, 0, Math.PI * 2);
+                ctx.fill();
+                
+                const fuseColor = bomb.timer % 20 < 10 ? '#f00' : '#ff0';
+                ctx.fillStyle = fuseColor;
+                ctx.beginPath();
+                ctx.arc(cx + 6, cy - 6, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            for (const flame of flames) {
+                ctx.fillStyle = '#FFD700';
+                ctx.fillRect(flame.gridX * GRID, flame.gridY * GRID, GRID, GRID);
+                ctx.fillStyle = '#FFA500';
+                ctx.fillRect(flame.gridX * GRID + 4, flame.gridY * GRID + 4, GRID - 8, GRID - 8);
+            }
+            
+            if (player.alive) {
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(player.pixelX + GRID/2, player.pixelY + GRID/2, 12, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#000';
+                ctx.fillRect(player.pixelX + GRID/2 - 6, player.pixelY + GRID/2 - 4, 3, 3);
+                ctx.fillRect(player.pixelX + GRID/2 + 3, player.pixelY + GRID/2 - 4, 3, 3);
+            }
+            
+            for (const enemy of enemies) {
+                if (!enemy.alive) continue;
+                ctx.fillStyle = '#e74c3c';
+                ctx.beginPath();
+                ctx.arc(enemy.pixelX + GRID/2, enemy.pixelY + GRID/2, 12, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(enemy.pixelX + GRID/2 - 4, enemy.pixelY + GRID/2 - 2, 3, 0, Math.PI * 2);
+                ctx.arc(enemy.pixelX + GRID/2 + 4, enemy.pixelY + GRID/2 - 2, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(enemy.pixelX + GRID/2 - 4, enemy.pixelY + GRID/2 - 2, 1.5, 0, Math.PI * 2);
+                ctx.arc(enemy.pixelX + GRID/2 + 4, enemy.pixelY + GRID/2 - 2, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === ' ' && gameState === 'playing') {
+                placeBomb();
+            }
+            if (e.key === 'r' || e.key === 'R') {
+                if (gameState !== 'playing') {
+                    init();
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        init();
+        gameLoop();
+    </script>
+</body>
+</html>
