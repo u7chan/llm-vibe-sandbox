@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Bomberman Clone</title>
+    <style>
+        body {
+            background: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: monospace;
+            color: white;
+        }
+        #game {
+            border: 2px solid #555;
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <canvas id="game" width="480" height="416"></canvas>
+        <div id="ui" style="margin-top: 10px; text-align: center;">
+            <span id="enemies">ENEMIES: 4</span> | 
+            <span id="power">FIRE: 3</span> | 
+            <span id="bombs">BOMB: 1</span>
+        </div>
+        <div id="message" style="margin-top: 10px; text-align: center; font-size: 24px;"></div>
+    </div>
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const GRID = 32;
+        const COLS = 15;
+        const ROWS = 13;
+        
+        const TILE = {
+            EMPTY: 0,
+            WALL: 1,
+            SOFT: 2
+        };
+        
+        let map = [];
+        let player = null;
+        let enemies = [];
+        let bombs = [];
+        let flames = [];
+        let items = [];
+        let gameState = 'playing';
+        let keys = {};
+        
+        function initMap() {
+            map = [];
+            for (let y = 0; y < ROWS; y++) {
+                map[y] = [];
+                for (let x = 0; x < COLS; x++) {
+                    if (x === 0 || x === COLS - 1 || y === 0 || y === ROWS - 1) {
+                        map[y][x] = TILE.WALL;
+                    } else if (x % 2 === 0 && y % 2 === 0) {
+                        map[y][x] = TILE.WALL;
+                    } else {
+                        map[y][x] = TILE.EMPTY;
+                    }
+                }
+            }
+            
+            for (let i = 0; i < 20; i++) {
+                let x, y;
+                do {
+                    x = Math.floor(Math.random() * (COLS - 2)) + 1;
+                    y = Math.floor(Math.random() * (ROWS - 2)) + 1;
+                } while (map[y][x] !== TILE.EMPTY || (x <= 2 && y <= 2));
+                map[y][x] = TILE.SOFT;
+            }
+        }
+        
+        function initEntities() {
+            player = { x: 1, y: 1, fire: 3, maxBombs: 1, bombCount: 0, alive: true };
+            enemies = [];
+            bombs = [];
+            flames = [];
+            items = [];
+            
+            for (let i = 0; i < 4; i++) {
+                let x, y;
+                do {
+                    x = Math.floor(Math.random() * (COLS - 2)) + 1;
+                    y = Math.floor(Math.random() * (ROWS - 2)) + 1;
+                } while (map[y][x] !== TILE.EMPTY || (x <= 2 && y <= 2));
+                enemies.push({ x: x, y: y, alive: true, dir: Math.floor(Math.random() * 4) });
+            }
+        }
+        
+        function canMove(x, y) {
+            let gx = Math.floor(x);
+            let gy = Math.floor(y);
+            if (gx < 0 || gx >= COLS || gy < 0 || gy >= ROWS) return false;
+            if (map[gy][gx] !== TILE.EMPTY) return false;
+            for (let b of bombs) {
+                if (b.x === gx && b.y === gy) return false;
+            }
+            return true;
+        }
+        
+        function updatePlayer() {
+            if (!player.alive || gameState !== 'playing') return;
+            
+            let dx = 0, dy = 0;
+            if (keys['ArrowUp'] || keys['KeyW']) dy = -1;
+            else if (keys['ArrowDown'] || keys['KeyS']) dy = 1;
+            else if (keys['ArrowLeft'] || keys['KeyA']) dx = -1;
+            else if (keys['ArrowRight'] || keys['KeyD']) dx = 1;
+            
+            if (dx !== 0 || dy !== 0) {
+                let nx = player.x + dx * 0.15;
+                let ny = player.y + dy * 0.15;
+                
+                let margin = 0.3;
+                if (dx > 0) {
+                    if (canMove(nx + margin, player.y - margin) && canMove(nx + margin, player.y + margin)) {
+                        player.x = nx;
+                    }
+                } else if (dx < 0) {
+                    if (canMove(nx - margin, player.y - margin) && canMove(nx - margin, player.y + margin)) {
+                        player.x = nx;
+                    }
+                }
+                if (dy > 0) {
+                    if (canMove(player.x - margin, ny + margin) && canMove(player.x + margin, ny + margin)) {
+                        player.y = ny;
+                    }
+                } else if (dy < 0) {
+                    if (canMove(player.x - margin, ny - margin) && canMove(player.x + margin, ny - margin)) {
+                        player.y = ny;
+                    }
+                }
+                
+                player.x = Math.max(0.5, Math.min(COLS - 0.5, player.x));
+                player.y = Math.max(0.5, Math.min(ROWS - 0.5, player.y));
+            }
+            
+            for (let item of items) {
+                if (Math.floor(player.x) === item.x && Math.floor(player.y) === item.y) {
+                    if (item.type === 'fire') player.fire++;
+                    else if (item.type === 'bomb') player.maxBombs++;
+                    items = items.filter(i => i !== item);
+                }
+            }
+        }
+        
+        function updateEnemies() {
+            if (gameState !== 'playing') return;
+            
+            for (let e of enemies) {
+                if (!e.alive) continue;
+                
+                let dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+                let moved = false;
+                
+                let testDir = dirs[e.dir];
+                let nx = e.x + testDir[0] * 0.1;
+                let ny = e.y + testDir[1] * 0.1;
+                
+                if (canMove(nx, ny)) {
+                    e.x = nx;
+                    e.y = ny;
+                    moved = true;
+                }
+                
+                if (!moved || Math.random() < 0.05) {
+                    e.dir = Math.floor(Math.random() * 4);
+                }
+                
+                e.x = Math.max(0.5, Math.min(COLS - 0.5, e.x));
+                e.y = Math.max(0.5, Math.min(ROWS - 0.5, e.y));
+                
+                if (Math.abs(player.x - e.x) < 0.6 && Math.abs(player.y - e.y) < 0.6) {
+                    player.alive = false;
+                    gameState = 'lose';
+                    document.getElementById('message').textContent = 'GAME OVER - Press R to retry';
+                    document.getElementById('message').style.color = 'red';
+                }
+            }
+        }
+        
+        function placeBomb() {
+            if (gameState !== 'playing' || !player.alive) return;
+            if (player.bombCount >= player.maxBombs) return;
+            
+            let gx = Math.floor(player.x + 0.5);
+            let gy = Math.floor(player.y + 0.5);
+            
+            for (let b of bombs) {
+                if (b.x === gx && b.y === gy) return;
+            }
+            
+            bombs.push({ x: gx, y: gy, timer: 180 });
+            player.bombCount++;
+        }
+        
+        function updateBombs() {
+            for (let i = bombs.length - 1; i >= 0; i--) {
+                let b = bombs[i];
+                b.timer--;
+                if (b.timer <= 0) {
+                    explode(b.x, b.y, player.fire);
+                    bombs.splice(i, 1);
+                    player.bombCount--;
+                }
+            }
+        }
+        
+        function explode(bx, by, fire) {
+            let dirs = [[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0]];
+            
+            for (let d = 0; d < dirs.length; d++) {
+                let dir = dirs[d];
+                for (let i = 0; i < fire; i++) {
+                    if (i === 0 && d > 0) continue;
+                    
+                    let fx = bx + dir[0] * i;
+                    let fy = by + dir[1] * i;
+                    
+                    if (fx < 0 || fx >= COLS || fy < 0 || fy >= ROWS) break;
+                    if (map[fy][fx] === TILE.WALL) break;
+                    
+                    flames.push({ x: fx, y: fy, timer: 30 });
+                    
+                    if (map[fy][fx] === TILE.SOFT) {
+                        map[fy][fx] = TILE.EMPTY;
+                        if (Math.random() < 0.5) {
+                            let type = Math.random() < 0.5 ? 'fire' : 'bomb';
+                            items.push({ x: fx, y: fy, type: type });
+                        }
+                        break;
+                    }
+                    
+                    for (let j = bombs.length - 1; j >= 0; j--) {
+                        if (bombs[j].x === fx && bombs[j].y === fy) {
+                            explode(bombs[j].x, bombs[j].y, player.fire);
+                            bombs.splice(j, 1);
+                            player.bombCount--;
+                        }
+                    }
+                }
+            }
+        }
+        
+        function updateFlames() {
+            for (let i = flames.length - 1; i >= 0; i--) {
+                let f = flames[i];
+                f.timer--;
+                
+                if (f.timer <= 0) {
+                    flames.splice(i, 1);
+                    continue;
+                }
+                
+                let px = Math.floor(player.x);
+                let py = Math.floor(player.y);
+                if (f.x === px && f.y === py) {
+                    player.alive = false;
+                    gameState = 'lose';
+                    document.getElementById('message').textContent = 'GAME OVER - Press R to retry';
+                    document.getElementById('message').style.color = 'red';
+                }
+                
+                for (let e of enemies) {
+                    if (e.alive && Math.floor(e.x) === f.x && Math.floor(e.y) === f.y) {
+                        e.alive = false;
+                    }
+                }
+            }
+            
+            let aliveEnemies = enemies.filter(e => e.alive).length;
+            if (aliveEnemies === 0 && gameState === 'playing') {
+                gameState = 'win';
+                document.getElementById('message').textContent = 'YOU WIN! - Press R to retry';
+                document.getElementById('message').style.color = '#0f0';
+            }
+        }
+        
+        function draw() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    let px = x * GRID;
+                    let py = y * GRID;
+                    
+                    if (map[y][x] === TILE.WALL) {
+                        ctx.fillStyle = '#666';
+                        ctx.fillRect(px, py, GRID, GRID);
+                        ctx.strokeStyle = '#444';
+                        ctx.strokeRect(px, py, GRID, GRID);
+                    } else if (map[y][x] === TILE.SOFT) {
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillRect(px + 2, py + 2, GRID - 4, GRID - 4);
+                    }
+                }
+            }
+            
+            for (let item of items) {
+                let px = item.x * GRID + GRID / 2;
+                let py = item.y * GRID + GRID / 2;
+                ctx.fillStyle = item.type === 'fire' ? '#FF4500' : '#00FF00';
+                ctx.beginPath();
+                ctx.arc(px, py, GRID / 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            for (let b of bombs) {
+                let px = b.x * GRID + GRID / 2;
+                let py = b.y * GRID + GRID / 2;
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(px, py, GRID / 2 - 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#333';
+                ctx.beginPath();
+                ctx.arc(px, py, GRID / 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            for (let f of flames) {
+                let px = f.x * GRID;
+                let py = f.y * GRID;
+                ctx.fillStyle = '#FFD700';
+                ctx.fillRect(px + 4, py + 4, GRID - 8, GRID - 8);
+            }
+            
+            if (player.alive) {
+                let px = player.x * GRID + GRID / 2;
+                let py = player.y * GRID + GRID / 2;
+                ctx.fillStyle = '#FFF';
+                ctx.beginPath();
+                ctx.arc(px, py, GRID / 2 - 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            for (let e of enemies) {
+                if (!e.alive) continue;
+                let px = e.x * GRID + GRID / 2;
+                let py = e.y * GRID + GRID / 2;
+                ctx.fillStyle = '#F00';
+                ctx.beginPath();
+                ctx.arc(px, py, GRID / 2 - 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            let aliveEnemies = enemies.filter(e => e.alive).length;
+            document.getElementById('enemies').textContent = 'ENEMIES: ' + aliveEnemies;
+            document.getElementById('power').textContent = 'FIRE: ' + player.fire;
+            document.getElementById('bombs').textContent = 'BOMB: ' + player.maxBombs;
+        }
+        
+        function gameLoop() {
+            if (gameState === 'playing') {
+                updatePlayer();
+                updateEnemies();
+                updateBombs();
+                updateFlames();
+            }
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function reset() {
+            initMap();
+            initEntities();
+            gameState = 'playing';
+            document.getElementById('message').textContent = '';
+        }
+        
+        document.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'Space') {
+                placeBomb();
+                e.preventDefault();
+            }
+            if (e.code === 'KeyR') {
+                reset();
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+        
+        reset();
+        gameLoop();
+    </script>
+</body>
+</html>
