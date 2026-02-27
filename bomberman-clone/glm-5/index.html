@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Bomberman Clone</title>
+  <style>
+    body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    canvas { border: 2px solid #333; }
+    #ui { position: absolute; top: 10px; left: 10px; color: white; font-family: monospace; font-size: 14px; }
+    #message { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-family: monospace; font-size: 32px; display: none; text-align: center; }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="480" height="416"></canvas>
+  <div id="ui">Enemies: 4 | Fire: 3 | Bombs: 1</div>
+  <div id="message"></div>
+  <script src="game.js"></script>
+</body>
+</html>
